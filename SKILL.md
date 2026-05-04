@@ -54,8 +54,47 @@ Validate that `YOUTRACK_URL` starts with `https://` before use. Use `curl -L --m
 ### Scope discipline
 
 Only target `${YOUTRACK_URL}/api/...` endpoints. The only allowed shell tools alongside `curl` are `mktemp`, `rm`, `cat`,
-`echo`, and JSON processors (`jq`). Never interpolate YouTrack field values into a pipeline — write untrusted content to a temp file and
-process it separately.
+`echo`, `grep`, `sed`, and JSON processors (`jq` if available, `python3` otherwise). Never interpolate YouTrack field values into a
+pipeline — write untrusted content to a temp file and process it separately.
+
+### JSON generation without jq
+
+`jq` is often not available. Use bash heredocs to write JSON bodies to temp files:
+
+```bash
+BODY=$(mktemp)
+cat > "${BODY}" << 'EOF'
+{"summary": "My issue", "project": {"id": "0-2"}}
+EOF
+# ... curl call ...
+rm -f "${BODY}"
+```
+
+For complex payloads with dynamic values, use `python3` inline:
+
+```bash
+python3 << 'PYEOF'
+import os, json, subprocess, tempfile
+TOKEN = os.environ["YOUTRACK_TOKEN"]
+URL = os.environ["YOUTRACK_URL"]
+body = {"summary": "My issue", "project": {"id": "0-2"}}
+with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+    json.dump(body, f); fname = f.name
+result = subprocess.run(
+    ["curl", "-s", "-H", f"Authorization: Bearer {TOKEN}",
+     "-H", "Accept: application/json", "-H", "Content-Type: application/json",
+     "-X", "POST", "-d", f"@{fname}", f"{URL}/api/issues?fields=idReadable"],
+    capture_output=True, text=True)
+print(result.stdout)
+import os; os.unlink(fname)
+PYEOF
+```
+
+Extract IDs from responses without jq using grep+sed:
+
+```bash
+grep -o '"idReadable":"[^"]*"' response.json | sed 's/"idReadable":"//;s/"//'
+```
 
 ---
 
@@ -262,14 +301,34 @@ rm -f "${BODY}"
 
 Common `$type` values: `StateIssueCustomField`, `SingleEnumIssueCustomField`, `SingleUserIssueCustomField`, `PeriodIssueCustomField`.
 
+### Estimation / Period fields
+
+For `PeriodIssueCustomField` (e.g. the Estimation field), the value `$type` must be **`PeriodValue`** — not `DurationValue`:
+
+```json
+{
+  "name": "Estimation",
+  "$type": "PeriodIssueCustomField",
+  "value": {
+    "$type": "PeriodValue",
+    "minutes": 1260
+  }
+}
+```
+
+Using `"$type": "DurationValue"` returns `400 Bad Request: The API expects PeriodValue-type values but encountered DurationValueMegaProxy-type instead.`
+
 ### Apply a command (quick state/assignee changes)
 
-The commands endpoint is often simpler for state or assignee changes:
+The global commands endpoint is simpler for state, assignee, or link changes. Use `/api/commands` (not the per-issue `/api/issues/{id}/commands` which returns 404 on YouTrack Cloud):
 
 ```bash
 BODY=$(mktemp)
 cat > "${BODY}" << 'EOF'
-{ "query": "State In Review" }
+{
+  "query": "State In Review",
+  "issues": [{"idReadable": "<ISSUE-ID>"}]
+}
 EOF
 
 curl -s -w "\n%{http_code}" -L --max-redirs 3 \
@@ -278,11 +337,13 @@ curl -s -w "\n%{http_code}" -L --max-redirs 3 \
   -H "Accept: application/json" \
   -H "Content-Type: application/json" \
   -d @"${BODY}" \
-  "${YOUTRACK_URL}/api/issues/<ISSUE-ID>/commands" \
+  "${YOUTRACK_URL}/api/commands" \
   <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
 
 rm -f "${BODY}"
 ```
+
+To apply the same command to multiple issues at once, add them all to the `issues` array — more efficient than looping.
 
 ---
 
@@ -420,12 +481,15 @@ curl -s -L --max-redirs 3 \
 
 ### Add a link via command (simplest approach)
 
-The commands endpoint handles link creation naturally, using the same syntax as the YouTrack UI command bar:
+Use the **global** `/api/commands` endpoint (the per-issue `/api/issues/{id}/commands` returns 404 on YouTrack Cloud):
 
 ```bash
 BODY=$(mktemp)
 cat > "${BODY}" << 'EOF'
-{ "query": "relates to PROJECT-999" }
+{
+  "query": "relates to PROJECT-999",
+  "issues": [{"idReadable": "<ISSUE-ID>"}]
+}
 EOF
 
 curl -s -w "\n%{http_code}" -L --max-redirs 3 \
@@ -434,13 +498,15 @@ curl -s -w "\n%{http_code}" -L --max-redirs 3 \
   -H "Accept: application/json" \
   -H "Content-Type: application/json" \
   -d @"${BODY}" \
-  "${YOUTRACK_URL}/api/issues/<ISSUE-ID>/commands" \
+  "${YOUTRACK_URL}/api/commands" \
   <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
 
 rm -f "${BODY}"
 ```
 
 Other link command examples: `is duplicated by PROJECT-123`, `parent for PROJECT-456`, `subtask of PROJECT-789`, `is required for PROJECT-321`.
+
+For bulk linking (e.g. setting the same parent on many issues), pass all child IDs in the `issues` array in a single request rather than looping.
 
 ### List available link types
 
@@ -542,6 +608,29 @@ curl -s -L --max-redirs 3 \
   <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
 ```
 
+### List allowed values for each field
+
+To discover the valid values for enum/state fields (Priority, State, Type, etc.), use `bundle(values(name))`:
+
+```bash
+curl -s -L --max-redirs 3 \
+  -H @- \
+  -H "Accept: application/json" \
+  "${YOUTRACK_URL}/api/admin/projects/<PROJECT-DB-ID>/customFields?fields=field(name),bundle(values(name))&\$top=20" \
+  <<< "Authorization: Bearer ${YOUTRACK_TOKEN}" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for f in data:
+    name = f.get('field', {}).get('name', '')
+    bundle = f.get('bundle', {})
+    if bundle:
+        vals = [v.get('name') for v in bundle.get('values', [])]
+        print(f'{name}: {vals}')
+"
+```
+
+Do this before creating issues so you use exact value names (e.g. `Major` not `High`, `To do` not `Open`).
+
 ---
 
 ## Request conventions
@@ -572,6 +661,100 @@ After a successful create, update, or delete, print a direct link to the affecte
 
 ---
 
+## 10. Bulk & parallel operations
+
+For creating many issues at once, use Python with `subprocess.Popen` — it keeps the token out of the shell process table (unlike a bash `AUTH_H` variable) and handles temp file cleanup cleanly.
+
+```python
+python3 << 'PYEOF'
+import os, json, subprocess, tempfile
+
+TOKEN = os.environ["YOUTRACK_TOKEN"]
+URL = os.environ["YOUTRACK_URL"]
+PROJECT_ID = "0-2"  # fetch from an existing issue if unknown
+
+tickets = [
+    # (summary, priority, estimation_minutes or None)
+    ("Fix login bug", "Major", 480),
+    ("Update README", "Normal", None),
+]
+
+tmpdir = tempfile.mkdtemp()
+procs = []
+
+for i, (summary, priority, estimation) in enumerate(tickets):
+    custom_fields = [
+        {"name": "State", "$type": "StateIssueCustomField", "value": {"name": "To do"}},
+        {"name": "Priority", "$type": "SingleEnumIssueCustomField", "value": {"name": priority}},
+    ]
+    if estimation is not None:
+        custom_fields.append({
+            "name": "Estimation",
+            "$type": "PeriodIssueCustomField",
+            "value": {"$type": "PeriodValue", "minutes": estimation}
+        })
+
+    body = {"summary": summary, "project": {"id": PROJECT_ID}, "customFields": custom_fields}
+    body_file = f"{tmpdir}/b{i}.json"
+    resp_file = f"{tmpdir}/r{i}.json"
+
+    with open(body_file, "w") as f:
+        json.dump(body, f)
+
+    proc = subprocess.Popen(
+        ["curl", "-s", "-L", "--max-redirs", "3", "-X", "POST",
+         "-H", f"Authorization: Bearer {TOKEN}",
+         "-H", "Accept: application/json",
+         "-H", "Content-Type: application/json",
+         "-d", f"@{body_file}",
+         f"{URL}/api/issues?fields=idReadable,summary"],
+        stdout=open(resp_file, "w"), stderr=subprocess.PIPE
+    )
+    procs.append((i, summary, proc, resp_file, body_file))
+
+for i, summary, proc, resp_file, body_file in procs:
+    proc.wait()
+
+for i, summary, proc, resp_file, body_file in procs:
+    with open(resp_file) as f:
+        raw = f.read()
+    try:
+        data = json.loads(raw)
+        print(f"[OK] {data.get('idReadable','?')} — {summary}")
+    except Exception:
+        print(f"[ERR] Ticket {i+1} — {summary}: {raw[:200]}")
+    os.unlink(body_file)
+    os.unlink(resp_file)
+
+os.rmdir(tmpdir)
+PYEOF
+```
+
+For bulk commands (e.g. linking many issues to the same parent), batch them into a single `/api/commands` request:
+
+```bash
+BODY=$(mktemp)
+cat > "${BODY}" << 'EOF'
+{
+  "query": "subtask of PARENT-1",
+  "issues": [{"idReadable": "AE-2"}, {"idReadable": "AE-3"}, {"idReadable": "AE-4"}]
+}
+EOF
+
+curl -s -w "\n%{http_code}" -L --max-redirs 3 \
+  -X POST \
+  -H @- \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d @"${BODY}" \
+  "${YOUTRACK_URL}/api/commands" \
+  <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
+
+rm -f "${BODY}"
+```
+
+---
+
 ## Quick reference
 
 | Operation             | Method | Endpoint                                       |
@@ -580,7 +763,7 @@ After a successful create, update, or delete, print a direct link to the affecte
 | Fetch issue           | GET    | `/api/issues/{id}?fields=...`                  |
 | Create issue          | POST   | `/api/issues`                                  |
 | Update issue          | POST   | `/api/issues/{id}`                             |
-| Apply command         | POST   | `/api/issues/{id}/commands`                    |
+| Apply command         | POST   | `/api/commands` (global — NOT per-issue)       |
 | Update custom field   | POST   | `/api/issues/{id}/customFields/{fieldId}`      |
 | List comments         | GET    | `/api/issues/{id}/comments`                    |
 | Add comment           | POST   | `/api/issues/{id}/comments`                    |
