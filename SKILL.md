@@ -522,6 +522,24 @@ curl -s -L --max-redirs 3 \
 
 ## 7. Work items (time tracking)
 
+### Prerequisite — time tracking must be enabled for the project
+
+`POST /api/issues/{id}/timeTracking/workItems` returns **403 Forbidden** if the project has time tracking disabled, even for admin tokens. The admin API endpoint (`/api/admin/projects/{id}/timeTrackingSettings`) also returns 403 programmatically.
+
+**You must enable it once via the YouTrack UI:**
+> Administration (gear icon) → Projects → [Project] → Time Tracking → check "Enable time tracking" → Save.
+
+Verify the current state before attempting to log work items:
+
+```bash
+curl -s -L --max-redirs 3 \
+  -H @- \
+  -H "Accept: application/json" \
+  "${YOUTRACK_URL}/api/admin/projects/<PROJECT-DB-ID>/timeTrackingSettings?fields=enabled" \
+  <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
+# {"enabled": false} → must enable via UI first
+```
+
 ### List work items on an issue
 
 ```bash
@@ -532,7 +550,7 @@ curl -s -L --max-redirs 3 \
   <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
 ```
 
-### Log a work item
+### Log a work item — REST API (requires time tracking enabled)
 
 Required field: `duration` (either `minutes` as an integer, or `presentation` as a string like `"2h 30m"`). `date` is a Unix timestamp in
 milliseconds; omit it to default to today.
@@ -558,6 +576,58 @@ curl -s -w "\n%{http_code}" -L --max-redirs 3 \
 
 rm -f "${BODY}"
 ```
+
+### Log a work item — command API (preferred for bulk import)
+
+Once time tracking is enabled, the command API is simpler for logging work, especially in bulk. Duration format: `1h30m`, `2h`, `30m`.
+
+```bash
+BODY=$(mktemp)
+cat > "${BODY}" << 'EOF'
+{
+  "query": "work 2024-09-03 1h30m Reviewed and addressed PR feedback",
+  "issues": [{"idReadable": "<ISSUE-ID>"}]
+}
+EOF
+
+curl -s -w "\n%{http_code}" -L --max-redirs 3 \
+  -X POST \
+  -H @- \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d @"${BODY}" \
+  "${YOUTRACK_URL}/api/commands" \
+  <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
+
+rm -f "${BODY}"
+```
+
+Date format is `YYYY-MM-DD`. Omit the date to default to today: `work 2h Fixed the bug`.
+
+### Set estimation via command (simpler than the custom field API)
+
+```bash
+BODY=$(mktemp)
+cat > "${BODY}" << 'EOF'
+{
+  "query": "Estimation 8h",
+  "issues": [{"idReadable": "<ISSUE-ID>"}]
+}
+EOF
+
+curl -s -w "\n%{http_code}" -L --max-redirs 3 \
+  -X POST \
+  -H @- \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d @"${BODY}" \
+  "${YOUTRACK_URL}/api/commands" \
+  <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
+
+rm -f "${BODY}"
+```
+
+This is equivalent to setting the `Estimation` custom field via `POST /api/issues/{id}/customFields/{fieldId}` but requires no field ID lookup.
 
 ---
 
@@ -633,6 +703,105 @@ Do this before creating issues so you use exact value names (e.g. `Major` not `H
 
 ---
 
+## 10. Knowledge Base articles
+
+YouTrack projects can have a Knowledge Base. Articles are created at `/api/articles` and support nesting via `parentArticle` for a folder-like structure.
+
+### List articles
+
+```bash
+curl -s -L --max-redirs 3 \
+  -H @- \
+  -H "Accept: application/json" \
+  "${YOUTRACK_URL}/api/articles?fields=id,idReadable,summary,parentArticle(id,summary)&\$top=50" \
+  <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
+```
+
+### Create an article
+
+```bash
+BODY=$(mktemp)
+cat > "${BODY}" << 'EOF'
+{
+  "summary": "Article title",
+  "content": "Markdown content here.",
+  "project": {"id": "<PROJECT-DB-ID>"}
+}
+EOF
+
+curl -s -w "\n%{http_code}" -L --max-redirs 3 \
+  -X POST \
+  -H @- \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d @"${BODY}" \
+  "${YOUTRACK_URL}/api/articles?fields=id,idReadable,summary" \
+  <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
+
+rm -f "${BODY}"
+```
+
+### Create a nested article (sub-article / folder structure)
+
+Add `parentArticle` with the parent's internal `id` (e.g. `180-1`):
+
+```bash
+BODY=$(mktemp)
+cat > "${BODY}" << 'EOF'
+{
+  "summary": "Child article",
+  "content": "Content...",
+  "project": {"id": "<PROJECT-DB-ID>"},
+  "parentArticle": {"id": "<PARENT-ARTICLE-DB-ID>"}
+}
+EOF
+
+curl -s -w "\n%{http_code}" -L --max-redirs 3 \
+  -X POST \
+  -H @- \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d @"${BODY}" \
+  "${YOUTRACK_URL}/api/articles?fields=id,idReadable,summary" \
+  <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
+
+rm -f "${BODY}"
+```
+
+**Typical pattern for a structured KB** — create root articles (folders) first, collect their `id` values, then create child articles referencing those IDs. The `id` returned in the response (e.g. `180-1`) is the internal DB ID used in `parentArticle`; `idReadable` (e.g. `VD-A-4`) is the human-readable reference.
+
+### Update an article
+
+```bash
+BODY=$(mktemp)
+cat > "${BODY}" << 'EOF'
+{"content": "Updated markdown content."}
+EOF
+
+curl -s -w "\n%{http_code}" -L --max-redirs 3 \
+  -X POST \
+  -H @- \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d @"${BODY}" \
+  "${YOUTRACK_URL}/api/articles/<ARTICLE-ID>?fields=id,summary" \
+  <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
+
+rm -f "${BODY}"
+```
+
+### Delete an article
+
+```bash
+curl -s -w "\n%{http_code}" -L --max-redirs 3 \
+  -X DELETE \
+  -H @- \
+  "${YOUTRACK_URL}/api/articles/<ARTICLE-ID>" \
+  <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
+```
+
+---
+
 ## Request conventions
 
 - Always include `Accept: application/json`.
@@ -661,7 +830,7 @@ After a successful create, update, or delete, print a direct link to the affecte
 
 ---
 
-## 10. Bulk & parallel operations
+## 11. Bulk & parallel operations
 
 For creating many issues at once, use Python with `subprocess.Popen` — it keeps the token out of the shell process table (unlike a bash `AUTH_H` variable) and handles temp file cleanup cleanly.
 
@@ -776,8 +945,14 @@ rm -f "${BODY}"
 | Read links            | GET    | `/api/issues/{id}/links`                       |
 | List link types       | GET    | `/api/issueLinkTypes`                          |
 | List work items       | GET    | `/api/issues/{id}/timeTracking/workItems`      |
-| Log work item         | POST   | `/api/issues/{id}/timeTracking/workItems`      |
+| Log work item (REST)  | POST   | `/api/issues/{id}/timeTracking/workItems` ⚠️ requires time tracking enabled |
+| Log work item (cmd)   | POST   | `/api/commands` — query: `work YYYY-MM-DD 1h30m description` |
+| Set estimation (cmd)  | POST   | `/api/commands` — query: `Estimation 8h`       |
 | Search users          | GET    | `/api/users?query=...`                         |
 | List groups           | GET    | `/api/groups`                                  |
 | Project custom fields | GET    | `/api/admin/projects/{projectId}/customFields` |
 | Saved queries         | GET    | `/api/savedQueries`                            |
+| List KB articles      | GET    | `/api/articles`                                |
+| Create KB article     | POST   | `/api/articles` (add `parentArticle.id` for nesting) |
+| Update KB article     | POST   | `/api/articles/{id}`                           |
+| Delete KB article     | DELETE | `/api/articles/{id}`                           |
