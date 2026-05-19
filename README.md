@@ -28,6 +28,7 @@ The skill requires two environment variables:
 |---|---|
 | `YOUTRACK_URL` | Base URL of your YouTrack instance, without trailing slash (e.g. `https://youtrack.example.com`) |
 | `YOUTRACK_TOKEN` | Permanent token for authentication |
+| `YOUTRACK_ISSUE_LANG` | Language for issue summaries and descriptions (e.g. `French`, `English`). Defaults to `English`. |
 
 ### Generating a token
 

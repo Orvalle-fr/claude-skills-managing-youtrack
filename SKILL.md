@@ -11,6 +11,8 @@ Requires two environment variables:
 - `YOUTRACK_URL` — base URL of the YouTrack instance (e.g. `https://youtrack.example.com`), **without a trailing slash**
 - `YOUTRACK_TOKEN` — permanent token for authentication
 
+- `YOUTRACK_ISSUE_LANG` — language to use for issue summaries and descriptions (e.g. `French`, `English`). Defaults to `English` if not set.
+
 Before making any API call, verify both `YOUTRACK_URL` and `YOUTRACK_TOKEN` are set and non-empty. If either is missing, stop and ask the user to configure it.
 UNDER NO CIRCUMSTANCE should you try to read the token value directly, or it will be a security breach and force the user to invalidate and
 cycle tokens. You can only check if it exists.
@@ -154,13 +156,14 @@ they approve. This prevents accidental issue creation.
 
 The `project.id` field in the _create_ payload must be the internal numeric ID, not the short name.
 
-Fetch the internal ID from an existing issue in that project:
+Fetch the internal ID by searching for a recent issue in that project — do NOT assume `<PROJECT>-1` exists, it may return 404:
 
 ```bash
-curl -s -L --max-redirs 3 \
+curl -s -G -L --max-redirs 3 \
   -H @- \
   -H "Accept: application/json" \
-  "${YOUTRACK_URL}/api/issues/<PROJECT>-1?fields=project(id,shortName)" \
+  --data-urlencode "query=project: <PROJECT>" \
+  "${YOUTRACK_URL}/api/issues?fields=idReadable,project(id,shortName)&\$top=1" \
   <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
 ```
 
@@ -168,19 +171,28 @@ curl -s -L --max-redirs 3 \
 
 YouTrack projects enforce required custom fields via workflow rules — a missing field causes a `400 Field required` error.
 
-Inspect an existing issue to find the expected fields and use its values as defaults:
+Inspect an existing issue to find the expected fields and use its values as defaults. Use a search query (not `<PROJECT>-1` which may not exist):
 
 ```bash
-curl -s -L --max-redirs 3 \
+curl -s -G -L --max-redirs 3 \
   -H @- \
   -H "Accept: application/json" \
-  "${YOUTRACK_URL}/api/issues/<PROJECT>-1?fields=customFields(name,value(name))" \
+  --data-urlencode "query=project: <PROJECT>" \
+  "${YOUTRACK_URL}/api/issues?fields=idReadable,customFields(name,\$type,value(name))&\$top=1" \
   <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
 ```
 
+State values vary by project — never assume `"Open"` or `"To do"`. Always check the actual values from an existing issue before creating.
+
+### Issue language
+
+Write all issue summaries and descriptions in the language defined by `YOUTRACK_ISSUE_LANG`. If the variable is not set, default to English.
+
 ### Create payload
 
-Write the JSON to a temp file, then POST it:
+Write the JSON to a temp file, then POST it.
+
+> **Important:** use the exact State value discovered from existing issues. For project `AE` the initial state is `"Ticket"`, not `"Open"`.
 
 ```json
 {
@@ -191,17 +203,10 @@ Write the JSON to a temp file, then POST it:
   },
   "customFields": [
     {
-      "name": "Type",
-      "$type": "SingleEnumIssueCustomField",
-      "value": {
-        "name": "Task"
-      }
-    },
-    {
       "name": "State",
       "$type": "StateIssueCustomField",
       "value": {
-        "name": "Open"
+        "name": "<state-from-existing-issue>"
       }
     },
     {
