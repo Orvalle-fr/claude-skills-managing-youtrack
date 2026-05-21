@@ -384,6 +384,39 @@ curl -s -w "\n%{http_code}" -L --max-redirs 3 \
 rm -f "${BODY}"
 ```
 
+### Add a private comment (restricted visibility)
+
+Use `$type: "LimitedVisibility"` with `permittedGroups` entries of type `"NestedGroup"`.
+Get group IDs from `GET /api/groups?fields=id,name`.
+
+```bash
+BODY=$(mktemp)
+cat > "${BODY}" << 'EOF'
+{
+  "text": "Private comment text here.",
+  "visibility": {
+    "$type": "LimitedVisibility",
+    "permittedGroups": [{"id": "<GROUP-ID>", "$type": "NestedGroup"}]
+  }
+}
+EOF
+
+curl -s -w "\n%{http_code}" -L --max-redirs 3 \
+  -X POST \
+  -H @- \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d @"${BODY}" \
+  "${YOUTRACK_URL}/api/issues/<ISSUE-ID>/comments?fields=id,text,visibility" \
+  <<< "Authorization: Bearer ${YOUTRACK_TOKEN}"
+
+rm -f "${BODY}"
+```
+
+> **Important:** Do NOT use `$type: "VisibilityGroups"` or `"VisibilityLimited"` — these return `400 Bad Request` on this instance. The correct type is `"LimitedVisibility"` with group entries typed as `"NestedGroup"`.
+>
+> To inspect the visibility structure of an existing comment: `GET /api/issues/<ID>/comments/<COMMENT-ID>?fields=id,visibility($type,permittedGroups(id,name))`
+
 ### Update a comment
 
 ```bash
