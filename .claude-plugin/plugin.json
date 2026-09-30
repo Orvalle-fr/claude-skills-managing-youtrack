@@ -1,0 +1,9 @@
+{
+  "name": "managing-youtrack",
+  "displayName": "YouTrack",
+  "description": "Interact with any YouTrack instance via its REST API: issues, custom fields, comments, tags, links, time tracking, users and Knowledge Base articles.",
+  "version": "1.0.0",
+  "author": { "name": "Orvalle" },
+  "homepage": "https://github.com/Orvalle-fr/claude-skills-managing-youtrack",
+  "keywords": ["youtrack", "issue-tracker", "jetbrains", "rest-api"]
+}

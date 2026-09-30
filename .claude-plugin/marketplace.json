@@ -1,0 +1,12 @@
+{
+  "name": "orvalle-plugins",
+  "description": "Claude Code plugins by Orvalle",
+  "owner": { "name": "Orvalle" },
+  "plugins": [
+    {
+      "name": "managing-youtrack",
+      "source": "./",
+      "description": "Interact with any YouTrack instance via its REST API"
+    }
+  ]
+}
