@@ -6,19 +6,14 @@ Inspired by [JetBrains' YouTrack skill](https://github.com/JetBrains/intellij-co
 
 ## Installation
 
-**For a single project** — clone directly into your project's `.claude/skills` directory:
+This repository is a Claude Code plugin marketplace (`orvalle-plugins`). Add it once, then install the plugin:
 
 ```bash
-git clone https://github.com/Orvalle-fr/claude-skills-managing-youtrack \
-  /your-project/.claude/skills/managing-youtrack
+claude plugin marketplace add Orvalle-fr/claude-skills-managing-youtrack
+claude plugin install managing-youtrack@orvalle-plugins
 ```
 
-**Globally** — clone into your user-level Claude skills directory:
-
-```bash
-git clone https://github.com/Orvalle-fr/claude-skills-managing-youtrack \
-  ~/.claude/skills/managing-youtrack
-```
+Get updates with `claude plugin update managing-youtrack@orvalle-plugins`.
 
 ## Configuration
 
@@ -77,7 +72,7 @@ source .env && claude
 Once installed and configured, invoke the skill in Claude Code:
 
 ```
-/managing-youtrack
+/managing-youtrack:managing-youtrack
 ```
 
 Then describe what you want to do in plain language, for example:

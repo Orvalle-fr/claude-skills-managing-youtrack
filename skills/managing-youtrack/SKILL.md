@@ -1,3 +1,8 @@
+---
+name: managing-youtrack
+description: Interact with a YouTrack instance via its REST API — search, create and update issues, custom fields, comments, tags, links, time tracking, users and Knowledge Base articles. Use when the user asks to read or change anything in YouTrack.
+---
+
 # YouTrack REST API Skill
 
 Interact with a YouTrack instance via its REST API. Work through operations one at a time, reporting results as you go.
@@ -83,10 +88,10 @@ body = {"summary": "My issue", "project": {"id": "0-2"}}
 with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
     json.dump(body, f); fname = f.name
 result = subprocess.run(
-    ["curl", "-s", "-H", f"Authorization: Bearer {TOKEN}",
+    ["curl", "-s", "-H", "@-",
      "-H", "Accept: application/json", "-H", "Content-Type: application/json",
      "-X", "POST", "-d", f"@{fname}", f"{URL}/api/issues?fields=idReadable"],
-    capture_output=True, text=True)
+    input=f"Authorization: Bearer {TOKEN}\n", capture_output=True, text=True)
 print(result.stdout)
 import os; os.unlink(fname)
 PYEOF
@@ -192,7 +197,7 @@ Write all issue summaries and descriptions in the language defined by `YOUTRACK_
 
 Write the JSON to a temp file, then POST it.
 
-> **Important:** use the exact State value discovered from existing issues. For project `AE` the initial state is `"Ticket"`, not `"Open"`.
+> **Important:** use the exact State value discovered from existing issues. Initial states are project-specific (e.g. `"Ticket"`, `"Submitted"`, `"To do"`) — never assume `"Open"`.
 
 ```json
 {
@@ -413,7 +418,7 @@ curl -s -w "\n%{http_code}" -L --max-redirs 3 \
 rm -f "${BODY}"
 ```
 
-> **Important:** Do NOT use `$type: "VisibilityGroups"` or `"VisibilityLimited"` — these return `400 Bad Request` on this instance. The correct type is `"LimitedVisibility"` with group entries typed as `"NestedGroup"`.
+> **Important:** Do NOT use `$type: "VisibilityGroups"` or `"VisibilityLimited"` — these return `400 Bad Request`. The correct type is `"LimitedVisibility"` with group entries typed as `"NestedGroup"`.
 >
 > To inspect the visibility structure of an existing comment: `GET /api/issues/<ID>/comments/<COMMENT-ID>?fields=id,visibility($type,permittedGroups(id,name))`
 
@@ -870,7 +875,7 @@ After a successful create, update, or delete, print a direct link to the affecte
 
 ## 11. Bulk & parallel operations
 
-For creating many issues at once, use Python with `subprocess.Popen` — it keeps the token out of the shell process table (unlike a bash `AUTH_H` variable) and handles temp file cleanup cleanly.
+For creating many issues at once, use Python with `subprocess.Popen` — the authorization header is written to curl's stdin (`-H @-`), which keeps the token out of the process table, and temp file cleanup stays simple.
 
 ```python
 python3 << 'PYEOF'
@@ -910,13 +915,16 @@ for i, (summary, priority, estimation) in enumerate(tickets):
 
     proc = subprocess.Popen(
         ["curl", "-s", "-L", "--max-redirs", "3", "-X", "POST",
-         "-H", f"Authorization: Bearer {TOKEN}",
+         "-H", "@-",
          "-H", "Accept: application/json",
          "-H", "Content-Type: application/json",
          "-d", f"@{body_file}",
          f"{URL}/api/issues?fields=idReadable,summary"],
-        stdout=open(resp_file, "w"), stderr=subprocess.PIPE
+        stdin=subprocess.PIPE, stdout=open(resp_file, "w"), stderr=subprocess.PIPE,
+        text=True
     )
+    proc.stdin.write(f"Authorization: Bearer {TOKEN}\n")
+    proc.stdin.close()
     procs.append((i, summary, proc, resp_file, body_file))
 
 for i, summary, proc, resp_file, body_file in procs:
@@ -944,7 +952,7 @@ BODY=$(mktemp)
 cat > "${BODY}" << 'EOF'
 {
   "query": "subtask of PARENT-1",
-  "issues": [{"idReadable": "AE-2"}, {"idReadable": "AE-3"}, {"idReadable": "AE-4"}]
+  "issues": [{"idReadable": "PROJECT-2"}, {"idReadable": "PROJECT-3"}, {"idReadable": "PROJECT-4"}]
 }
 EOF
 
